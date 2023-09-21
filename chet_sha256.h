@@ -1,6 +1,22 @@
 /*
-chet_sha256 - v0.1.0 - public domain sha2
+chet_sha256 - v1.0.0 - public domain sha2
     no warranty implied; use at your own risk
+    supports c99 or later
+
+USAGE
+    Do this:
+    #define CHET_SHA256_IMPLEMENTATION
+    before you include this file in *one* C or C++ file to create the implementation.
+
+    // i.e. it should look like this:
+    #include ...
+    #include ...
+    #include ...
+    #define CHET_SHA256_IMPLEMENTATION
+    #include "stb_image.h"
+
+API
+    void chet_sha256(const void *input, size_t byte_length, uint32_t hash_result[8])
 
 LICENSE
     See the end of this file for the license information.
@@ -15,14 +31,13 @@ LICENSE
 #include <stdint.h>
 #endif
 
-typedef struct chet_hash256_s_
-{
-    uint32_t hash[8];
-} chet_hash256_t;
+/* BEGIN API */
 
-extern chet_hash256_t chet_sha256(const void *input, size_t byte_length);
+/* `input` will have `byte_length` bytes hashed, this doesn't hash bit lengths */
+extern void chet_sha256(const void *input, size_t byte_length, uint32_t hash_result[8]);
 
-/* END HEADER */
+/* END API */
+
 #endif
 
 #ifdef CHET_SHA256_IMPLEMENTATION
@@ -36,13 +51,13 @@ extern chet_hash256_t chet_sha256(const void *input, size_t byte_length);
 static uint64_t chet_sha2__swap_endian_64(uint64_t x)
 {
     return (x & ((uint64_t)0xFF      )) << 56 |
-        (x & ((uint64_t)0xFF << 8 )) << 40 |
-        (x & ((uint64_t)0xFF << 16)) << 24 |
-        (x & ((uint64_t)0xFF << 24)) <<  8 |
-        (x & ((uint64_t)0xFF << 32)) >>  8 |
-        (x & ((uint64_t)0xFF << 40)) >> 24 |
-        (x & ((uint64_t)0xFF << 48)) >> 40 |
-        (x & ((uint64_t)0xFF << 56)) >> 56;
+           (x & ((uint64_t)0xFF << 8 )) << 40 |
+           (x & ((uint64_t)0xFF << 16)) << 24 |
+           (x & ((uint64_t)0xFF << 24)) <<  8 |
+           (x & ((uint64_t)0xFF << 32)) >>  8 |
+           (x & ((uint64_t)0xFF << 40)) >> 24 |
+           (x & ((uint64_t)0xFF << 48)) >> 40 |
+           (x & ((uint64_t)0xFF << 56)) >> 56;
 }
 
 static size_t chet_sha2__boundary_ceil(size_t value, size_t align)
@@ -58,21 +73,8 @@ static size_t chet_sha2__boundary_ceil(size_t value, size_t align)
 #define chet_sha2__sigma_0(x) (chet_sha2__rotr(x, 7) ^ chet_sha2__rotr(x, 18) ^ (x >> 3))
 #define chet_sha2__sigma_1(x) (chet_sha2__rotr(x, 17) ^ chet_sha2__rotr(x, 19) ^ (x >> 10))
 
-/* `input` will have `byte_length` bytes hashed, this doesn't hash bit lengths */
-chet_hash256_t chet_sha256(const void *input, size_t byte_length)
+void chet_sha256(const void *input, size_t byte_length, uint32_t hash_result[8])
 {
-    chet_hash256_t hash =
-    {
-        0x6a09e667,
-        0xbb67ae85,
-        0x3c6ef372,
-        0xa54ff53a,
-        0x510e527f,
-        0x9b05688c,
-        0x1f83d9ab,
-        0x5be0cd19
-    };
-
     uint32_t k_const[64] =
     {
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -100,16 +102,30 @@ chet_hash256_t chet_sha256(const void *input, size_t byte_length)
 
     size_t final_chunks_byte_length = number_final_chunks * 64;
 
+    uint32_t w_schedule[64] = {0};
+    size_t chunk = 0;
+
+    uint64_t encoded_length = chet_sha2__swap_endian_64(bit_length);
+
     /* create the final chunk / padded chunk */
     memcpy(&final_chunks[0], &data[full_chunks * 64], bit_remainder / 8);
     final_chunks[final_chunks_byte_length - padding_bytes] = 1 << 7; /* append a byte disguised as a single bit */
-    uint64_t encoded_length = chet_sha2__swap_endian_64(bit_length);
     memcpy(&final_chunks[final_chunks_byte_length - sizeof(encoded_length)], &encoded_length, sizeof(encoded_length));
 
-    uint32_t w_schedule[64] = {0};
-    size_t chunk = 0;
+    hash_result[0] = 0x6a09e667;
+    hash_result[1] = 0xbb67ae85;
+    hash_result[2] = 0x3c6ef372;
+    hash_result[3] = 0xa54ff53a;
+    hash_result[4] = 0x510e527f;
+    hash_result[5] = 0x9b05688c;
+    hash_result[6] = 0x1f83d9ab;
+    hash_result[7] = 0x5be0cd19;
+
     while (chunk < (full_chunks + number_final_chunks))
     {
+        size_t word;
+        size_t tdx;
+
         /* detect if we are processing the last (padded) chunk(s) */
         if (chunk == full_chunks)
         {
@@ -117,13 +133,12 @@ chet_hash256_t chet_sha256(const void *input, size_t byte_length)
         }
 
         /* 1. */
-        size_t word;
         for (word = 0; word < 16; ++word)
         {
             w_schedule[word] = (uint32_t)(data[word * 4])     << 24 |
-                (uint32_t)(data[word * 4 + 1]) << 16 |
-                (uint32_t)(data[word * 4 + 2]) <<  8 |
-                (uint32_t)(data[word * 4 + 3]);
+                               (uint32_t)(data[word * 4 + 1]) << 16 |
+                               (uint32_t)(data[word * 4 + 2]) <<  8 |
+                               (uint32_t)(data[word * 4 + 3]);
         }
         for (word = 16; word < 64; ++word)
         {
@@ -132,17 +147,16 @@ chet_hash256_t chet_sha256(const void *input, size_t byte_length)
         }
 
         /* 2. */
-        uint32_t a = hash.hash[0];
-        uint32_t b = hash.hash[1];
-        uint32_t c = hash.hash[2];
-        uint32_t d = hash.hash[3];
-        uint32_t e = hash.hash[4];
-        uint32_t f = hash.hash[5];
-        uint32_t g = hash.hash[6];
-        uint32_t h = hash.hash[7];
+        uint32_t a = hash_result[0];
+        uint32_t b = hash_result[1];
+        uint32_t c = hash_result[2];
+        uint32_t d = hash_result[3];
+        uint32_t e = hash_result[4];
+        uint32_t f = hash_result[5];
+        uint32_t g = hash_result[6];
+        uint32_t h = hash_result[7];
 
         /* 3. */
-        size_t tdx;
         for (tdx = 0; tdx < 64; ++tdx)
         {
             uint32_t T1 = h + chet_sha2__SIGMA_1(e) + chet_sha2__choose(e, f, g) + k_const[tdx] + w_schedule[tdx];
@@ -158,20 +172,18 @@ chet_hash256_t chet_sha256(const void *input, size_t byte_length)
         }
 
         /* 4. */
-        hash.hash[0] += a;
-        hash.hash[1] += b;
-        hash.hash[2] += c;
-        hash.hash[3] += d;
-        hash.hash[4] += e;
-        hash.hash[5] += f;
-        hash.hash[6] += g;
-        hash.hash[7] += h;
+        hash_result[0] += a;
+        hash_result[1] += b;
+        hash_result[2] += c;
+        hash_result[3] += d;
+        hash_result[4] += e;
+        hash_result[5] += f;
+        hash_result[6] += g;
+        hash_result[7] += h;
 
         data += 64;
         chunk++;
     }
-
-    return hash;
 }
 
 #endif
